@@ -1,7 +1,6 @@
 use cosmrs::crypto::{secp256k1::SigningKey, PublicKey};
 
 use hyperlane_core::{AccountAddressType, ChainResult};
-
 use crate::{CosmosAddress, HyperlaneCosmosError};
 
 #[derive(Clone, Debug)]
@@ -45,6 +44,10 @@ impl Signer {
     /// precompiled and stored in `Signer`, because `SigningKey` is not `Sync`.
     pub fn signing_key(&self) -> ChainResult<SigningKey> {
         Self::build_signing_key(&self.private_key)
+    }
+
+    pub fn private_key(&self) -> Vec<u8> {
+        self.private_key.clone()
     }
 
     fn build_signing_key(private_key: &Vec<u8>) -> ChainResult<SigningKey> {

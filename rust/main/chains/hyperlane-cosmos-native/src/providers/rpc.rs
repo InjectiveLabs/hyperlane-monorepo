@@ -1,17 +1,18 @@
 use std::future::Future;
 use std::time::Instant;
+use protobuf::Message as _;
+use ethers::utils::keccak256;
 
-use cosmrs::{
-    proto::cosmos::{
-        auth::v1beta1::{BaseAccount, QueryAccountRequest, QueryAccountResponse},
-        bank::v1beta1::{QueryBalanceRequest, QueryBalanceResponse},
-        tx::v1beta1::{SimulateRequest, SimulateResponse, TxRaw},
-    },
-    rpc::HttpClient,
-    tx::{self, Fee, MessageExt, SignDoc, SignerInfo},
-    Any, Coin,
-};
+use cosmrs::{proto::cosmos::{
+    auth::v1beta1::{BaseAccount, QueryAccountRequest, QueryAccountResponse},
+    bank::v1beta1::{QueryBalanceRequest, QueryBalanceResponse},
+    tx::v1beta1::{SimulateRequest, SimulateResponse, TxRaw},
+}, rpc::HttpClient, tx::{self, Fee, MessageExt, SignDoc, SignerInfo}, Any, Coin};
+use cosmrs::tx::SignerPublicKey;
+use ecdsa::SigningKey;
 use hyperlane_cosmos_rs::prost::Message;
+use k256::elliptic_curve::SecretKey;
+use k256::Secp256k1;
 use tendermint::{hash::Algorithm, Hash};
 use tendermint_rpc::{
     client::CompatMode,
@@ -22,7 +23,7 @@ use tendermint_rpc::{
     Client, Error,
 };
 use tonic::async_trait;
-
+use tracing::info;
 use hyperlane_core::{
     h512_to_bytes,
     rpc_clients::{BlockNumberGetter, FallbackProvider},
@@ -32,7 +33,6 @@ use hyperlane_metric::prometheus_metric::{
     ClientConnectionType, PrometheusClientMetrics, PrometheusConfig,
 };
 use url::Url;
-
 use crate::{ConnectionConf, CosmosAmount, HyperlaneCosmosError, Signer};
 
 use super::cosmos::CosmosFallbackProvider;
@@ -289,15 +289,39 @@ impl RpcProvider {
                 QueryAccountRequest { address },
             )
             .await?;
-        let account = BaseAccount::decode(
+
+        // let account = BaseAccount::decode(
+        //     response
+        //         .account
+        //         .ok_or_else(|| ChainCommunicationError::from_other_str("account not present"))?
+        //         .value
+        //         .as_slice(),
+        // )
+        // .map_err(HyperlaneCosmosError::from)?;
+
+        let mut eth_account = injective_protobuf::proto::account::EthAccount::parse_from_bytes(
             response
                 .account
                 .ok_or_else(|| ChainCommunicationError::from_other_str("account not present"))?
                 .value
                 .as_slice(),
-        )
-        .map_err(HyperlaneCosmosError::from)?;
-        Ok(account)
+        ).map_err(Into::<HyperlaneCosmosError>::into)?;
+
+        let base_account = eth_account.take_base_account();
+        let pub_key = base_account.pub_key.into_option();
+
+        Ok(BaseAccount {
+            address: base_account.address,
+            pub_key: pub_key.map(|pub_key| Any {
+                type_url: pub_key.type_url,
+                value: pub_key.value,
+            }),
+            account_number: base_account.account_number,
+            sequence: base_account.sequence,
+        })
+
+
+        // Ok(account)
     }
 
     /// Get the gas price
@@ -314,12 +338,23 @@ impl RpcProvider {
     ) -> ChainResult<SignDoc> {
         // As this function is only used for estimating gas or sending transactions,
         // we can reasonably expect to have a signer.
+        info!("generating sign doc...");
+
         let signer = self.get_signer()?;
         let account_info = self.get_account(signer.address.clone()).await?;
 
+        info!("with signer address: {}", signer.address.clone());
+        info!("with signer pub key: {}", hex::encode(signer.public_key.to_bytes()));
+
         // timeout height of zero means that we do not have a timeout height TODO: double check
         let tx_body = tx::Body::new(msgs, String::default(), 0u32);
-        let signer_info = SignerInfo::single_direct(Some(signer.public_key), account_info.sequence);
+        let mut signer_info = SignerInfo::single_direct(Some(signer.public_key), account_info.sequence);
+
+        info!("overriding pub key type: {}", account_info.clone().pub_key.unwrap().type_url);
+        info!("overriding pub key value: {}", hex::encode(account_info.clone().pub_key.unwrap().value.to_vec()));
+
+        // override the public key
+        signer_info.public_key = Some(SignerPublicKey::Any(account_info.pub_key.unwrap()));
 
         let amount: u128 = (FixedPointNumber::from(gas_limit) * self.gas_price())
             .ceil_to_integer()
@@ -395,13 +430,44 @@ impl RpcProvider {
             None => self.estimate_gas(msgs.clone()).await?,
         };
 
+        info!("creating signed tx...");
+
         let sign_doc = self.generate_sign_doc(msgs, gas_limit).await?;
         let signer = self.get_signer()?;
+        let signing_key = signer.signing_key()?;
+        let pub_key = signing_key.public_key();
 
-        let signed_tx = sign_doc
-            .sign(&signer.signing_key()?)
-            .map_err(HyperlaneCosmosError::from)?;
-        let signed_tx = signed_tx.to_bytes()?;
+        use k256::ecdsa::{SigningKey, Signature};
+        use k256::ecdsa::signature::DigestSigner;
+        use sha3::{Keccak256, Digest};
+
+        // let sk: SecretKey<Secp256k1> = SecretKey::from_slice(signer.private_key().as_ref()).unwrap();
+        let sk = SigningKey::from_slice(signer.private_key().as_slice()).unwrap();
+        let mut h = sha3::Keccak256::new();
+        h.update(sign_doc.clone().into_bytes().unwrap().as_slice());
+        let (sig, _) = sk.try_sign_digest(h).unwrap();
+
+
+        // info!("pub_key_type: {}", pub_key.type_url().to_string());
+        // info!("pub_key_bytes: {}", hex::encode(pub_key.to_bytes()));
+        // info!("pub_key_string: {}", pub_key.to_string());
+        //
+        // let sign_doc_bytes = sign_doc.clone().into_bytes()?;
+        // let digest = H256::from_slice(&keccak256(&sign_doc_bytes));
+        //
+        // let signature = signing_key.sign(sign_doc_bytes.clone().as_slice())?;
+
+        // info!("sign_doc_bytes: {}", hex::encode(&sign_doc_bytes));
+        // info!("keccak256: {}", hex::encode(digest.as_bytes()));
+        // info!("signature: {}", hex::encode(signature.to_bytes()));
+
+        let signed_tx = TxRaw {
+            body_bytes: sign_doc.body_bytes,
+            auth_info_bytes: sign_doc.auth_info_bytes,
+            signatures: vec![sig.to_vec()],
+        };
+
+        let signed_tx = signed_tx.to_bytes().unwrap();
 
         // broadcast tx commit blocks until the tx is included in a block
         self.provider
