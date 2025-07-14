@@ -3,7 +3,6 @@ use cosmrs::Any;
 use hex::ToHex;
 use hyperlane_cosmos_rs::hyperlane::core::interchain_security::v1::MsgAnnounceValidator;
 use hyperlane_cosmos_rs::prost::{Message, Name};
-use tracing::info;
 use hyperlane_core::{
     Announcement, ChainResult, ContractLocator, Encode, FixedPointNumber, HyperlaneChain,
     HyperlaneContract, HyperlaneDomain, HyperlaneProvider, SignedType, TxOutcome,
@@ -84,18 +83,12 @@ impl ValidatorAnnounce for CosmosNativeValidatorAnnounce {
             creator: signer,
         };
 
-        info!("validator announce {:?}", &announce);
-
         let any_msg = Any {
             type_url: MsgAnnounceValidator::type_url(),
             value: announce.encode_to_vec(),
         };
 
-        info!("announcing...");
-
         let response = self.provider.rpc().send(vec![any_msg], None).await?;
-
-        info!("announced");
 
         // we assume that the underlying cosmos chain does not have gas refunds
         // in that case the gas paid will always be:
