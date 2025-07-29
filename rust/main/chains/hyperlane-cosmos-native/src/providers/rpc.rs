@@ -296,12 +296,11 @@ impl RpcProvider {
     }
 
     async fn get_account(&self, address: String) -> ChainResult<BaseAccount> {
-        let response: QueryAccountResponse = self
-            .abci_query(
+        println!("address: {}", address.clone());
+        let response: QueryAccountResponse = self.abci_query(
                 "/cosmos.auth.v1beta1.Query/Account",
                 QueryAccountRequest { address },
-            )
-            .await?;
+            ).await?;
 
         // let account = BaseAccount::decode(
         //     response

@@ -94,6 +94,16 @@ where
         &self,
         range: RangeInclusive<u32>,
     ) -> ChainResult<Vec<(Indexed<T>, LogMeta)>> {
+        let adjusted_range = {
+            let start = *range.start();
+            let end = *range.end();
+            if start == 0 {
+                1..=end
+            } else {
+                range.clone()
+            }
+        };
+        let range = adjusted_range.clone();
         let futures: Vec<_> = range
             .map(|block_height| {
                 let clone = self.clone();
