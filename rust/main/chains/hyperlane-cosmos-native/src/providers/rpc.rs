@@ -302,15 +302,8 @@ impl RpcProvider {
                 QueryAccountRequest { address },
             ).await?;
 
-        // let account = BaseAccount::decode(
-        //     response
-        //         .account
-        //         .ok_or_else(|| ChainCommunicationError::from_other_str("account not present"))?
-        //         .value
-        //         .as_slice(),
-        // )
-        // .map_err(HyperlaneCosmosError::from)?;
 
+        // Injective uses custom proto type for account info. The account must exist in auth module
         let mut eth_account = injective_protobuf::proto::account::EthAccount::parse_from_bytes(
             response
                 .account
@@ -331,9 +324,6 @@ impl RpcProvider {
             account_number: base_account.account_number,
             sequence: base_account.sequence,
         })
-
-
-        // Ok(account)
     }
 
     /// Get the gas price
@@ -350,7 +340,6 @@ impl RpcProvider {
     ) -> ChainResult<SignDoc> {
         // As this function is only used for estimating gas or sending transactions,
         // we can reasonably expect to have a signer.
-
         let signer = self.get_signer()?;
         let account_info = self.get_account(signer.address_string.clone()).await?;
 
@@ -358,7 +347,7 @@ impl RpcProvider {
         let tx_body = tx::Body::new(msgs, String::default(), 0u32);
         let mut signer_info = SignerInfo::single_direct(Some(signer.public_key), account_info.sequence);
 
-        // override the public key
+        // Override the public key with the public key obtained from Injective
         signer_info.public_key = Some(SignerPublicKey::Any(account_info.pub_key.unwrap()));
 
         let amount: u128 = (FixedPointNumber::from(gas_limit) * self.gas_price())
@@ -442,25 +431,11 @@ impl RpcProvider {
         use k256::ecdsa::signature::DigestSigner;
         use sha3::Digest;
 
-        // let sk: SecretKey<Secp256k1> = SecretKey::from_slice(signer.private_key().as_ref()).unwrap();
+        // Perform raw signing to generate a signature which Injective can verify
         let sk = SigningKey::from_slice(signer.private_key().as_slice()).unwrap();
         let mut h = sha3::Keccak256::new();
         h.update(sign_doc.clone().into_bytes().unwrap().as_slice());
         let (sig, _) = sk.try_sign_digest(h).unwrap();
-
-
-        // info!("pub_key_type: {}", pub_key.type_url().to_string());
-        // info!("pub_key_bytes: {}", hex::encode(pub_key.to_bytes()));
-        // info!("pub_key_string: {}", pub_key.to_string());
-        //
-        // let sign_doc_bytes = sign_doc.clone().into_bytes()?;
-        // let digest = H256::from_slice(&keccak256(&sign_doc_bytes));
-        //
-        // let signature = signing_key.sign(sign_doc_bytes.clone().as_slice())?;
-
-        // info!("sign_doc_bytes: {}", hex::encode(&sign_doc_bytes));
-        // info!("keccak256: {}", hex::encode(digest.as_bytes()));
-        // info!("signature: {}", hex::encode(signature.to_bytes()));
 
         let signed_tx = TxRaw {
             body_bytes: sign_doc.body_bytes,

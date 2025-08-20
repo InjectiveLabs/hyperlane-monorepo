@@ -94,6 +94,7 @@ where
         &self,
         range: RangeInclusive<u32>,
     ) -> ChainResult<Vec<(Indexed<T>, LogMeta)>> {
+        // Block 0 cannot be queried in Cosmos SDK (for events)
         let adjusted_range = {
             let start = *range.start();
             let end = *range.end();
