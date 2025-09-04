@@ -9,6 +9,7 @@ use cosmrs::{proto::cosmos::{
 }, rpc::HttpClient, tx::{self, Fee, MessageExt, SignDoc, SignerInfo}, Any, Coin};
 use cosmrs::tx::SignerPublicKey;
 use hyperlane_cosmos_rs::prost::Message;
+use protobuf::reflect::ProtobufValue;
 use tendermint::{hash::Algorithm, Hash};
 use tendermint_rpc::{
     client::CompatMode,
@@ -302,21 +303,24 @@ impl RpcProvider {
             ).await?;
 
 
-        // Injective uses custom proto type for account info. The account must exist in auth module
-        let mut eth_account = injective_protobuf::proto::account::EthAccount::parse_from_bytes(
-            response
-                .account
-                .ok_or_else(|| ChainCommunicationError::from_other_str("account not present"))?
-                .value
-                .as_slice(),
-        ).map_err(Into::<HyperlaneCosmosError>::into)?;
+        let any = response
+            .account
+            .ok_or_else(||
+                ChainCommunicationError::from_other_str(
+                    "account info not present",
+            ))?;
 
-        let base_account = eth_account.take_base_account();
-        let pub_key = base_account.pub_key.into_option();
+        let any_bytes = any.value.as_slice();
+
+        use injective_protobuf::proto::account::EthAccount as inj_account;
+        let base_account = inj_account::parse_from_bytes(any_bytes)
+            .map_err(
+            Into::<HyperlaneCosmosError>::into)?
+            .take_base_account();
 
         Ok(BaseAccount {
             address: base_account.address,
-            pub_key: pub_key.map(|pub_key| Any {
+            pub_key: base_account.pub_key.into_option().map(|pub_key| Any {
                 type_url: pub_key.type_url,
                 value: pub_key.value,
             }),
@@ -346,7 +350,11 @@ impl RpcProvider {
         let tx_body = tx::Body::new(msgs, String::default(), 0u32);
         let mut signer_info = SignerInfo::single_direct(Some(signer.public_key), account_info.sequence);
 
-        // Override the public key with the public key obtained from Injective
+        // Intentionally override the configured public key with the one obtained in account_info,
+        // because the pub key obtained from signer is actually of type cosmos.crypto.secp256k1.PubKey.
+        // The yet-to-be created SignDoc needs to be generated based on Injective's PubKey implementation,
+        // which is of type injective.crypto.v1beta1.ethsecp256k1.PubKey.
+        // See injective-core/injective-chain/crypto/ethsecp256k1 for more details
         signer_info.public_key = Some(SignerPublicKey::Any(account_info.pub_key.unwrap()));
 
         let amount: u128 = (FixedPointNumber::from(gas_limit) * self.gas_price())
@@ -426,20 +434,28 @@ impl RpcProvider {
         let sign_doc = self.generate_sign_doc(msgs, gas_limit).await?;
         let signer = self.get_signer()?;
 
-        use k256::ecdsa::SigningKey;
-        use k256::ecdsa::signature::DigestSigner;
-        use sha3::Digest;
-
-        // Perform raw signing to generate a signature which Injective can verify
-        let sk = SigningKey::from_slice(signer.private_key().as_slice()).unwrap();
-        let mut h = sha3::Keccak256::new();
-        h.update(sign_doc.clone().into_bytes().unwrap().as_slice());
-        let (sig, _) = sk.try_sign_digest(h).unwrap();
+        // use k256::ecdsa;
+        // use k256::ecdsa::signature::DigestSigner;
+        // use sha3::{Digest, Keccak256};
+        // 
+        // // Perform raw signing to generate a signature which Injective can verify
+        // let sk = ecdsa::SigningKey::from_slice(
+        //     signer
+        //         .private_key()
+        //         .as_slice(),
+        // ).unwrap();
+        // 
+        // let mut h = Keccak256::new();
+        // h.update(sign_doc.clone().into_bytes()?.as_slice());
+        // 
+        // let (sig, _) = sk.try_sign_digest(h).unwrap();
+        
+        let signature = signer.sign_injective(sign_doc.clone().into_bytes()?.as_slice());
 
         let signed_tx = TxRaw {
             body_bytes: sign_doc.body_bytes,
             auth_info_bytes: sign_doc.auth_info_bytes,
-            signatures: vec![sig.to_vec()],
+            signatures: vec![signature.to_vec()],
         };
 
         let signed_tx = signed_tx.to_bytes().unwrap();

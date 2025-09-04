@@ -1,4 +1,4 @@
-use     std::str::FromStr;
+use std::str::FromStr;
 
 use derive_new::new;
 use url::Url;

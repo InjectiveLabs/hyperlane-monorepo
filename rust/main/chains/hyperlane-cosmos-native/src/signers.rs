@@ -1,5 +1,4 @@
 use cosmrs::crypto::{secp256k1::SigningKey, PublicKey};
-
 use hyperlane_core::{AccountAddressType, ChainResult, H256};
 
 use crate::{CosmosAddress, HyperlaneCosmosError};
@@ -52,6 +51,22 @@ impl Signer {
 
     pub fn private_key(&self) -> Vec<u8> {
         self.private_key.clone()
+    }
+
+    /// Sign with private key as Injective expects
+    pub fn sign_injective(&self, sign_doc: &[u8]) -> Vec<u8> {
+        use k256::ecdsa::SigningKey;
+        use k256::ecdsa::signature::DigestSigner;
+        use sha3::{Digest, Keccak256};
+
+        // Perform raw signing to generate a signature which Injective can verify
+        let sk = SigningKey::from_slice(self.private_key.as_slice()).unwrap();
+        let mut h = Keccak256::new();
+        h.update(sign_doc);
+
+        let (sig, _) = sk.try_sign_digest(h).unwrap();
+
+        sig.to_vec()
     }
 
     fn build_signing_key(private_key: &Vec<u8>) -> ChainResult<SigningKey> {
