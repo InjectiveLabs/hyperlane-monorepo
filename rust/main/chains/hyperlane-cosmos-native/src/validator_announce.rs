@@ -3,6 +3,7 @@ use cosmrs::Any;
 use hex::ToHex;
 use hyperlane_cosmos_rs::hyperlane::core::interchain_security::v1::MsgAnnounceValidator;
 use hyperlane_cosmos_rs::prost::{Message, Name};
+
 use hyperlane_core::{
     Announcement, ChainResult, ContractLocator, Encode, FixedPointNumber, HyperlaneChain,
     HyperlaneContract, HyperlaneDomain, HyperlaneProvider, SignedType, TxOutcome,

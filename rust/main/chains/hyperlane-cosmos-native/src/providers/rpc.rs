@@ -9,6 +9,7 @@ use cosmrs::{proto::cosmos::{
 }, rpc::HttpClient, tx::{self, Fee, MessageExt, SignDoc, SignerInfo}, Any, Coin};
 use cosmrs::tx::SignerPublicKey;
 use hyperlane_cosmos_rs::prost::Message;
+use protobuf::reflect::ProtobufValue;
 use tendermint::{hash::Algorithm, Hash};
 use tendermint_rpc::{
     client::CompatMode,
@@ -302,21 +303,24 @@ impl RpcProvider {
             ).await?;
 
 
-        // Injective uses custom proto type for account info. The account must exist in auth module
-        let mut eth_account = injective_protobuf::proto::account::EthAccount::parse_from_bytes(
-            response
-                .account
-                .ok_or_else(|| ChainCommunicationError::from_other_str("account not present"))?
-                .value
-                .as_slice(),
-        ).map_err(Into::<HyperlaneCosmosError>::into)?;
+        let any = response
+            .account
+            .ok_or_else(||
+                ChainCommunicationError::from_other_str(
+                    "account info not present",
+            ))?;
 
-        let base_account = eth_account.take_base_account();
-        let pub_key = base_account.pub_key.into_option();
+        let any_bytes = any.value.as_slice();
+
+        use injective_protobuf::proto::account::EthAccount as inj_account;
+        let base_account = inj_account::parse_from_bytes(any_bytes)
+            .map_err(
+            Into::<HyperlaneCosmosError>::into)?
+            .take_base_account();
 
         Ok(BaseAccount {
             address: base_account.address,
-            pub_key: pub_key.map(|pub_key| Any {
+            pub_key: base_account.pub_key.into_option().map(|pub_key| Any {
                 type_url: pub_key.type_url,
                 value: pub_key.value,
             }),
@@ -344,9 +348,15 @@ impl RpcProvider {
 
         // timeout height of zero means that we do not have a timeout height TODO: double check
         let tx_body = tx::Body::new(msgs, String::default(), 0u32);
-        let mut signer_info = SignerInfo::single_direct(Some(signer.public_key), account_info.sequence);
 
-        // Override the public key with the public key obtained from Injective
+        // Intentionally override the configured public key with the one obtained in account_info.
+        // The yet-to-be created SignDoc needs to be generated based on Injective's PubKey implementation.
+        // See injective-core/injective-chain/crypto/ethsecp256k1 for more details
+        let mut signer_info = SignerInfo::single_direct(
+            Some(signer.public_key),
+            account_info.sequence,
+        );
+
         signer_info.public_key = Some(SignerPublicKey::Any(account_info.pub_key.unwrap()));
 
         let amount: u128 = (FixedPointNumber::from(gas_limit) * self.gas_price())
