@@ -49,17 +49,19 @@ impl Signer {
         Self::build_signing_key(&self.private_key)
     }
 
-    pub fn private_key(&self) -> Vec<u8> {
-        self.private_key.clone()
-    }
-
-    /// Sign with private key as Injective expects
+    /// Raw signing with private key just like Injective expects
     pub fn sign_injective(&self, sign_doc: &[u8]) -> Vec<u8> {
         use k256::ecdsa::SigningKey;
         use k256::ecdsa::signature::DigestSigner;
         use sha3::{Digest, Keccak256};
 
-        // Perform raw signing to generate a signature which Injective can verify
+        // The method signing_key (above) is being sidestepped because Injective
+        // uses a custom key implementation (see injective-core/injective-chain/crypto/ethsecp256k1)
+        // Hyperlane uses the abstraction provided by cosmrs which is only aware of 2 possible types
+        // none of which match the underlying key type:
+        //
+        //
+        //
         let sk = SigningKey::from_slice(self.private_key.as_slice()).unwrap();
         let mut h = Keccak256::new();
         h.update(sign_doc);

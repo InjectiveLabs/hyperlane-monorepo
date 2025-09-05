@@ -432,23 +432,6 @@ impl RpcProvider {
 
         let sign_doc = self.generate_sign_doc(msgs, gas_limit).await?;
         let signer = self.get_signer()?;
-
-        // use k256::ecdsa;
-        // use k256::ecdsa::signature::DigestSigner;
-        // use sha3::{Digest, Keccak256};
-        // 
-        // // Perform raw signing to generate a signature which Injective can verify
-        // let sk = ecdsa::SigningKey::from_slice(
-        //     signer
-        //         .private_key()
-        //         .as_slice(),
-        // ).unwrap();
-        // 
-        // let mut h = Keccak256::new();
-        // h.update(sign_doc.clone().into_bytes()?.as_slice());
-        // 
-        // let (sig, _) = sk.try_sign_digest(h).unwrap();
-        
         let signature = signer.sign_injective(sign_doc.clone().into_bytes()?.as_slice());
 
         let signed_tx = TxRaw {
