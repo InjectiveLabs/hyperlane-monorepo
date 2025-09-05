@@ -1,4 +1,4 @@
-name: Build Docker Image
+name: Build Rust Docker Image
 on:
   pull_request:
     branches:

@@ -296,26 +296,22 @@ impl RpcProvider {
     }
 
     async fn get_account(&self, address: String) -> ChainResult<BaseAccount> {
-        let response: QueryAccountResponse = self.abci_query(
+        let response: QueryAccountResponse = self
+            .abci_query(
                 "/cosmos.auth.v1beta1.Query/Account",
                 QueryAccountRequest { address },
             ).await?;
 
-
         let any = response
             .account
-            .ok_or_else(||
-                ChainCommunicationError::from_other_str(
-                    "account info not present",
+            .ok_or_else(|| ChainCommunicationError::from_other_str(
+                    "failed to parse account response",
             ))?;
 
-        let any_bytes = any.value.as_slice();
-
         use injective_protobuf::proto::account::EthAccount as inj_account;
-        let base_account = inj_account::parse_from_bytes(any_bytes)
-            .map_err(
-            Into::<HyperlaneCosmosError>::into)?
-            .take_base_account();
+        let base_account = inj_account::parse_from_bytes(
+            any.value.as_slice(),
+        ).map_err(Into::<HyperlaneCosmosError>::into)?.take_base_account();
 
         Ok(BaseAccount {
             address: base_account.address,
@@ -432,12 +428,13 @@ impl RpcProvider {
 
         let sign_doc = self.generate_sign_doc(msgs, gas_limit).await?;
         let signer = self.get_signer()?;
-        let signature = signer.sign_injective(sign_doc.clone().into_bytes()?.as_slice());
+        let sign_bytes = sign_doc.clone().into_bytes()?;
+        let signature = signer.sign_injective(sign_bytes.as_slice());
 
         let signed_tx = TxRaw {
             body_bytes: sign_doc.body_bytes,
             auth_info_bytes: sign_doc.auth_info_bytes,
-            signatures: vec![signature.to_vec()],
+            signatures: vec![signature],
         };
 
         let signed_tx = signed_tx.to_bytes().unwrap();

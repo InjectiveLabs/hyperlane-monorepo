@@ -55,13 +55,6 @@ impl Signer {
         use k256::ecdsa::signature::DigestSigner;
         use sha3::{Digest, Keccak256};
 
-        // The method signing_key (above) is being sidestepped because Injective
-        // uses a custom key implementation (see injective-core/injective-chain/crypto/ethsecp256k1)
-        // Hyperlane uses the abstraction provided by cosmrs which is only aware of 2 possible types
-        // none of which match the underlying key type:
-        //
-        //
-        //
         let sk = SigningKey::from_slice(self.private_key.as_slice()).unwrap();
         let mut h = Keccak256::new();
         h.update(sign_doc);
