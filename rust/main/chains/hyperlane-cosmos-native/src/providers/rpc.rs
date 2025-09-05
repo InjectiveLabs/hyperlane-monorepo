@@ -9,7 +9,6 @@ use cosmrs::{proto::cosmos::{
 }, rpc::HttpClient, tx::{self, Fee, MessageExt, SignDoc, SignerInfo}, Any, Coin};
 use cosmrs::tx::SignerPublicKey;
 use hyperlane_cosmos_rs::prost::Message;
-use protobuf::reflect::ProtobufValue;
 use tendermint::{hash::Algorithm, Hash};
 use tendermint_rpc::{
     client::CompatMode,
