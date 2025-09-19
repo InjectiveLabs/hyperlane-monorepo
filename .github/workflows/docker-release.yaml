@@ -28,7 +28,7 @@ env:
   IMAGE_NAME: hyperlane-agents
   ECR_REPO: public.ecr.aws/l9h3g6c6/injective-hyperlane-agents
   AWS_REGION: us-east-1
-#  GIT_TAG: "${{ inputs.tag }}"
+  GIT_TAG: "${{ inputs.tag }}"
 
 jobs:
   build-image-at-tag:
