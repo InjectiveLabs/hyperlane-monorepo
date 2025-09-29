@@ -1,4 +1,4 @@
-name: Build Rust Docker Image
+name: Build Rust Agents For Injective
 on:
   workflow_dispatch:
     inputs:
