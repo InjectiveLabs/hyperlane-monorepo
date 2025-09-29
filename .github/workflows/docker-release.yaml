@@ -1,0 +1,146 @@
+name: Build Rust Docker Image
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The tag of the image to build"
+        required: true
+        type: string
+      is_latest:
+        description: "Push as latest?"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ORG: injectivelabs
+  IMAGE_NAME: hyperlane-agents
+  ECR_REPO: public.ecr.aws/l9h3g6c6/injective-hyperlane-agents
+  AWS_REGION: us-east-1
+  GIT_TAG: "${{ inputs.tag }}"
+
+jobs:
+  build-image-at-tag:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: blacksmith-2vcpu-ubuntu-2204
+            platform: linux/amd64
+            arch: amd64
+          - os: blacksmith-2vcpu-ubuntu-2204-arm
+            platform: linux/arm64
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    outputs:
+      digest_amd64: ${{ steps.capture-digest.outputs.digest_amd64 }}
+      digest_arm64: ${{ steps.capture-digest.outputs.digest_arm64 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: "${{ env.GIT_TAG }}"
+          fetch-depth: 1
+          fetch-tags: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to DockerHub
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ID }}:role/hyperlane-monorepo
+          aws-region: ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+
+      - name: Login to Amazon ECR Public
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          platforms: ${{ matrix.platform }}
+          context: .
+          file: ./rust/Dockerfile
+          tags: |
+            ${{ env.ORG }}/${{ env.IMAGE_NAME }}:${{ env.GIT_TAG }}
+            ${{ env.ECR_REPO }}:${{ env.GIT_TAG }}
+          push: true
+          outputs: type=image,name=${{ env.ORG }}/${{ env.IMAGE_NAME }},digest=true
+
+      - name: Capture Image Digest
+        id: capture-digest
+        run: |
+          echo "digest_${{ matrix.arch }}=${{ steps.build.outputs.digest }}" >> $GITHUB_ENV
+          echo "::set-output name=digest_${{ matrix.arch }}::${{ steps.build.outputs.digest }}"
+
+  merge:
+    runs-on: blacksmith-2vcpu-ubuntu-2204
+    needs: build-image-at-tag
+    steps:
+      - name: Get sanitized Docker tag
+        run: echo "DOCKER_TAG=$(echo $GIT_TAG | sed 's/[^a-zA-Z0-9\.]/-/g')" >> $GITHUB_ENV
+
+      - name: Debug Output Digests
+        run: |
+          echo "AMD64 Digest: ${{ needs.build-image-at-tag.outputs.digest_amd64 }}"
+          echo "ARM64 Digest: ${{ needs.build-image-at-tag.outputs.digest_arm64 }}"
+
+      - name: Login to DockerHub
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ID }}:role/hyperlane-monorepo
+          aws-region: ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+
+      - name: Login to Amazon ECR Public
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      - name: Create Multi-Arch Manifest
+        run: |
+          docker buildx imagetools create \
+            --tag ${{ env.ORG }}/${{ env.IMAGE_NAME }}:${{ env.DOCKER_TAG }} \
+            ${{ env.ORG }}/${{ env.IMAGE_NAME }}@${{ needs.build-image-at-tag.outputs.digest_amd64 }} \
+            ${{ env.ORG }}/${{ env.IMAGE_NAME }}@${{ needs.build-image-at-tag.outputs.digest_arm64 }}
+          docker buildx imagetools create \
+            --tag ${{ env.ECR_REPO }}:${{ env.DOCKER_TAG }} \
+            ${{ env.ECR_REPO }}@${{ needs.build-image-at-tag.outputs.digest_amd64 }} \
+            ${{ env.ECR_REPO }}@${{ needs.build-image-at-tag.outputs.digest_arm64 }}
+
+      - name: Tag and Push Latest (if applicable)
+        if: ${{ inputs.is_latest == true }}
+        run: |
+          docker buildx imagetools create \
+            --tag ${{ env.ORG }}/${{ env.IMAGE_NAME }}:latest \
+            ${{ env.ORG }}/${{ env.IMAGE_NAME }}@${{ needs.build-image-at-tag.outputs.digest_amd64 }} \
+            ${{ env.ORG }}/${{ env.IMAGE_NAME }}@${{ needs.build-image-at-tag.outputs.digest_arm64 }}
+          docker buildx imagetools create \
+            --tag ${{ env.ECR_REPO }}:latest \
+            ${{ env.ECR_REPO }}@${{ needs.build-image-at-tag.outputs.digest_amd64 }} \
+            ${{ env.ECR_REPO }}@${{ needs.build-image-at-tag.outputs.digest_arm64 }}
